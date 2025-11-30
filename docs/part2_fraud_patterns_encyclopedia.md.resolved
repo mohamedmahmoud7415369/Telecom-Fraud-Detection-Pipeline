@@ -1,0 +1,618 @@
+# Part 2: Telecom Fraud Patterns - Complete Encyclopedia
+
+## Introduction
+
+This document catalogs 15+ major fraud patterns affecting the telecommunications industry, organized by impact level and sophistication. Each pattern includes attack methodology, detection algorithms, real-world case studies, financial impact data, and countermeasures.
+
+---
+
+## Table of Contents
+
+### High-Impact Revenue Fraud
+1. [IRSF - International Revenue Share Fraud](#1-irsf)
+2. [SIM Box / Gateway Bypass](#2-sim-box)
+3. [Wangiri (One Ring Scam)](#3-wangiri)
+4. [PBX Hacking](#4-pbx-hacking)
+5. [Artificial Inflation of Traffic](#5-ait)
+
+### Customer Victimization
+6. [Account Takeover](#6-account-takeover)
+7. [Subscription Fraud](#7-subscription-fraud)
+8. [Identity Theft](#8-identity-theft)
+9. [SIM Swap Fraud](#9-sim-swap)
+
+### Network Abuse
+10. [SIM Cloning](#10-sim-cloning)
+11. [Roaming Fraud](#11-roaming-fraud)
+12. [Premium SMS Fraud](#12-premium-sms)
+
+### Emerging Threats (2024-2025)
+13. [eSIM Swap Attacks](#13-esim-swap)
+14. [AI-Powered Social Engineering](#14-ai-social-engineering)
+15. [IoT SIM Exploitation](#15-iot-sim)
+
+---
+
+## 1. IRSF - International Revenue Share Fraud
+
+### 1.1 Overview
+**Annual Global Impact:** $4-8 billion  
+**Detection Difficulty:** Medium  
+**Perpetrator:** Organized crime groups, hackers  
+**Victim:** Telecom carriers (direct revenue loss)
+
+### 1.2 Attack Methodology
+
+**Step-by-Step Attack Flow:**
+
+1. **Access Acquisition**
+   - Compromise corporate PBX system (weak passwords, unpatched Asterisk)
+   - Stolen customer credentials (phishing, credential stuffing)
+   - Insider threat (employee sells access)
+
+2. **Routing Setup**
+   - Fraudster controls premium numbers in countries like:
+     - Cuba (+53): $2.50/minute termination fees
+     - Somalia (+252): $3.00/minute
+     - Satellite (+882, +883): $4.50/minute
+   - Negotiates revenue-sharing with complicit carrier
+
+3. **Call Generation**
+   - Automated dialing scripts make hundreds of calls
+   - Calls kept alive for hours (often overnight)
+   - Use legitimate-looking patterns (10-20 min intervals)
+
+4. **Revenue Split**
+   ```
+   $2/min call to Cuba
+     → $1.20 to Cuban carrier (termination fee)
+     → $0.50 to fraudster
+     → $0.30 to carrier overhead
+   
+   1000 hours of fraud = $60,000 in 24 hours
+   ```
+
+### 1.3 Detection Algorithms
+
+**Rule-Based Detection (Real-Time):**
+```python
+def detect_irsf_realtime(cdr_record):
+    risk_score = 0
+    
+    # Factor 1: High-cost destination (50 points)
+    high_cost_countries = ['CU', 'SO', 'LY', 'AF']  # Cuba, Somalia, etc.
+    if cdr_record['destination_country'] in high_cost_countries:
+        risk_score += 50
+    
+    # Factor 2: Long duration (30 points)
+    if cdr_record['call_duration'] > 60:  # minutes
+        risk_score += 30
+    
+    # Factor 3: Unusual time (10 points)
+    hour = cdr_record['timestamp'].hour
+    if hour < 6 or hour > 22:  # Night calls
+        risk_score += 10
+    
+    # Factor 4: Multiple sequential calls (10 points)
+    if count_calls_last_hour(cdr_record['customer_id']) > 5:
+        risk_score += 10
+    
+    if risk_score >= 80:
+        return "BLOCK_CALL", "High IRSF risk"
+    elif risk_score >= 60:
+        return "ALERT", "Medium IRSF risk"
+    else:
+        return "ALLOW", "Normal"
+```
+
+**Machine Learning Model:**
+```python
+# Features for Random Forest classifier
+features = [
+    'destination_country_risk_score',  # Pre-calculated risk by country
+    'call_duration',
+    'time_of_day_deviation',  # Hours from user's typical call time
+    'dest_number_appearance_count',  # How many users called this number
+    'customer_historical_intl_pct',  # User's normal international %
+    'call_cost_estimate',
+    'days_since_last_intl_call',
+    'device_type'  # PBX systems vs mobile
+]
+
+# Train on labeled dataset
+model = RandomForestClassifier(n_estimators=100)
+model.fit(X_train, y_train)
+
+# Predict on incoming call
+if model.predict_proba(features)[1] > 0.85:
+    block_call()
+```
+
+### 1.4 Case Study: Operation Phish Phry (2009)
+
+**Incident:**
+- Egyptian cybercrime ring compromised 100+ US banks
+- Used stolen credentials to initiate calls from bank PBX systems
+- Routed calls to premium numbers in Egypt & UAE
+- Total loss: $1.2 million in 6 months
+
+**Detection Failure:**
+- Banks didn't monitor international call patterns
+- No alerts for overnight calling spikes
+- Fraud discovered only after customer complaints
+
+**Lessons Learned:**
+- Real-time call analytics are essential
+- Whitelist-based international calling (opt-in for businesses)
+- Two-factor auth for PBX admin access
+
+### 1.5 Countermeasures
+
+**Preventive:**
+- [ ] Implement international dialing blocks by default
+- [ ] Require manual approval for high-cost destinations
+- [ ] Set per-account spending thresholds ($100/day)
+
+**Detective:**
+- [ ] Real-time CDR monitoring with < 30 sec alerts
+- [ ] Daily reports of international call spikes
+- [ ] Cross-reference with customer profile (does user travel?)
+
+**Responsive:**
+- [ ] Auto-block after 3 consecutive calls to same premium destination
+- [ ] Customer SMS notification for any international call > $10
+- [ ] Fraud team escalation within 15 minutes
+
+---
+
+## 2. SIM Box / Gateway Bypass
+
+### 2.1 Overview
+**Annual Global Impact:** $3-6 billion  
+**Detection Difficulty:** Hard  
+**Perpetrator:** Organized fraud rings  
+**Victim:** Carriers (lost interconnect revenue)
+
+### 2.2 Technical Explanation
+
+**What is a SIM Box?**
+A hardware device with 8-32 consumer SIM cards that converts VoIP calls to GSM calls, bypassing official international gateways.
+
+**Physical Setup:**
+```
+[Fraudster's Server] 
+  → VoIP over Internet (free)
+  → [SIM Box in Destination Country]
+       - 32× consumer SIM cards
+       - GSM modem for each SIM
+       - Automated rotation
+  → [Local GSM Network]
+```
+
+**Economic Model:**
+```
+Official Route:
+  International call: $2.00/min
+  → Interconnect fee: $0.80/min to carrier
+  
+Fraudster Route:
+  VoIP call: $0.00/min (internet)
+  → SIM box local call: $0.10/min (prepaid SIM)
+  → Profit: $1.90/min saved × 10,000 mins/day = $19,000/day
+```
+
+### 2.3 Detection Indicators
+
+**Primary Signals:**
+
+1. **Volume Anomaly**
+   - Single `customer_id` makes 500+ calls/day
+   - Sustained for weeks/months
+
+2. **Duration Pattern**
+   - Total `monthly_call_duration` > 1000 minutes
+   - Some SIM boxes run 16+ hours/day
+
+3. **Location Stationarity**
+   - Device never moves (same cell tower 24/7)
+   - Normal users commute (home → work → home)
+
+4. **Call Spacing**
+   - Perfectly timed calls (e.g., every 6 minutes)
+   - Automated timer-controlled dialing
+
+5. **Device Profile**
+   - Uses cheap handsets ($10 feature phones)
+   - `device_model` = "Generic GSM Phone"
+
+**Detection Query:**
+```sql
+SELECT 
+    c.customer_id,
+    c.monthly_call_count,
+    c.monthly_call_duration,
+    l.unique_tower_count,
+    d.device_model,
+    p.customer_segment
+FROM cdr_data c
+INNER JOIN (
+    SELECT customer_id, COUNT(DISTINCT cell_tower_id) as unique_tower_count
+    FROM location_updates
+    WHERE timestamp > NOW() - INTERVAL '30 days'
+    GROUP BY customer_id
+) l ON c.customer_id = l.customer_id
+INNER JOIN device_information d ON c.customer_id = d.customer_id
+INNER JOIN customer_profiles p ON c.customer_id = p.customer_id
+WHERE 
+    c.monthly_call_count > 500
+    AND c.monthly_call_duration > 1000
+    AND l.unique_tower_count < 3  -- Never moves
+    AND d.device_model LIKE '%Generic%'
+ORDER BY c.monthly_call_count DESC
+```
+
+### 2.4 Advanced Detection: Call Pattern Analysis
+
+**Benford's Law Violation:**
+Normal human call patterns follow Benford's Law (leading digit distribution). SIM boxes violate this.
+
+```python
+import numpy as np
+from scipy.stats import chisquare
+
+def detect_simbox_benfords_law(customer_call_durations):
+    # Get first digit of each call duration
+    first_digits = [int(str(int(d))[0]) for d in customer_call_durations if d > 0]
+    
+    # Benford's expected distribution
+    benford_expected = {
+        1: 0.301, 2: 0.176, 3: 0.125, 4: 0.097, 5: 0.079,
+        6: 0.067, 7: 0.058, 8: 0.051, 9: 0.046
+    }
+    
+    # Observed distribution
+    observed = np.histogram(first_digits, bins=range(1, 11))[0]
+    expected = [benford_expected[i] * len(first_digits) for i in range(1, 10)]
+    
+    # Chi-square test
+    chi2, p_value = chisquare(observed, expected)
+    
+    if p_value < 0.01:  # Significant deviation
+        return True, "Likely SIM box (violates Benford's Law)"
+    return False, "Normal call pattern"
+```
+
+### 2.5 Case Study: Kenya SIM Box Bust (2023)
+
+**Incident:**
+- Police raided warehouse in Nairobi
+- Found 8 SIM boxes with 256 active SIMs
+- Estimated $4M annual revenue loss to Safaricom
+- Connected to organized crime network
+
+**Technical Details:**
+- Each SIM averaged 600 calls/day
+- Operated 20 hours/day
+- Used stolen IDs to register prepaid SIMs
+
+**Law Enforcement:**
+- Arrested 5 individuals
+- Equipment seized under Kenya's SIM Box Regulations Act (2021)
+
+---
+
+## 3. Wangiri (One Ring Scam)
+
+### 3.1 Overview
+**Origin:** Japan ("Wangiri" = One Ring and Cut)  
+**Annual Global Impact:** $1-2 billion  
+**Detection Difficulty:** Easy  
+**Perpetrator:** Scam call centers, bots
+
+### 3.2 Attack Flow
+
+**Step 1: Mass Dialing**
+```python
+# Bot script
+for number in random_phone_numbers(100000):
+    call(number, ring_duration=3)  # Ring for 3 seconds
+    hangup()
+    sleep(0.1)
+```
+
+**Step 2: Victim Callback**
+- Victim sees missed call
+- Calls back (curiosity / thinks it's important)
+- Connected to premium-rate number
+
+**Step 3: Revenue Generation**
+```
+Premium number charges: $3/minute
+Automated recording keeps user on line 5+ minutes
+Revenue: $15 per victim
+Success rate: 1% (1000 out of 100,000 call back)
+Total: 1000 × $15 = $15,000
+Cost: 100,000 calls × $0.01 = $1,000
+Profit: $14,000
+```
+
+### 3.3 Detection (Attacker Side)
+
+```python
+# Identify Wangiri bots
+if monthly_call_count > 100 AND avg_call_duration < 1:
+    flag_as_wangiri_attacker()
+    suspend_account()
+```
+
+### 3.4 Detection (Victim Protection)
+
+```python
+# Warn customers before they call back
+def check_callback_safety(destination_number):
+    # Check if number is known premium-rate
+    premium_prefixes = ['1-900', '809', '876']  # Examples
+    
+    for prefix in premium_prefixes:
+        if destination_number.startswith(prefix):
+            return "WARNING: This is a premium-rate number ($3/min)"
+    
+    # Check if number has called many people once
+    victim_count = count_unique_recipients(destination_number, last_24_hours)
+    if victim_count > 1000:
+        return "WARNING: This number called 1000+ people today (likely scam)"
+    
+    return "Safe to call"
+```
+
+---
+
+## 4. PBX Hacking
+
+### 4.1 Overview
+**Target:** Corporate phone systems  
+**Entry Point:** Weak credentials, unpatched software  
+**Impact per Incident:** $10,000 - $500,000
+
+### 4.2 Common Vulnerabilities
+
+| PBX System | Default Credentials | Known Exploits |
+|:-----------|:-------------------|:---------------|
+| Asterisk | admin/admin | CVE-2020-28242 (RCE) |
+| FreePBX | admin/admin | Weak SIP auth |
+| Cisco UC | cisco/cisco | Default SNMP community string |
+| Avaya IP Office | Administrator/password | Unencrypted SIP traffic |
+
+### 4.3 Attack Pattern
+
+**Reconnaissance:**
+```bash
+# Shodan query to find exposed PBX systems
+"SIP/2.0" port:5060
+```
+
+**Exploitation:**
+```python
+# Brute force SIP authentication
+import sip_brute_force
+
+target = "192.168.1.100:5060"
+wordlist = ["admin", "password", "cisco", "1234"]
+
+for password in wordlist:
+    if sip_brute_force.try_auth(target, "admin", password):
+        print(f"Success: admin/{password}")
+        break
+```
+
+**Detection:**
+```sql
+-- Identify compromised PBX
+SELECT 
+    customer_id,
+    COUNT(*) as weekend_calls,
+    SUM(call_duration) as total_duration,
+    COUNT(DISTINCT destination_country) as country_count
+FROM cdr_data
+WHERE 
+    customer_segment = 'Business'
+    AND DAYOFWEEK(timestamp) IN (1, 7)  -- Saturday/Sunday
+    AND HOUR(timestamp) BETWEEN 22 AND 6  -- Night
+GROUP BY customer_id
+HAVING 
+    weekend_calls > 100 
+    AND country_count > 10
+```
+
+---
+
+## 5. Account Takeover (ATO)
+
+### 5.1 Overview
+**Annual Impact:** $6 billion (all industries)  
+**Detection Difficulty:** Hard  
+**Success Rate:** 3-5% of attacks
+
+### 5.2 Multi-Phase Attack
+
+**Phase 1: Credential Acquisition**
+- Phishing emails ("Verify your account")
+- Data breaches (password reuse from other sites)
+- Keyloggers / malware
+
+**Phase 2: Reconnaissance**
+- Login to self-service portal
+- Identify account value (balance, plan)
+- Check security settings (2FA enabled?)
+
+**Phase 3: Preparation**
+- Disable 2FA (if possible)
+- Change email/phone to attacker's
+- Order SIM swap
+
+**Phase 4: Exploitation**
+- Make expensive calls
+- Port number to different carrier
+- Sell account credentials on dark web
+
+### 5.3 Behavioral Biometric Detection
+
+```python
+class BehavioralAnomalyDetector:
+    def __init__(self):
+        self.user_profiles = {}
+    
+    def build_profile(self, customer_id, historical_data):
+        """Build baseline behavioral profile"""
+        self.user_profiles[customer_id] = {
+            'typical_login_hours': self._extract_hours(historical_data['login_times']),
+            'typical_locations': self._extract_locations(historical_data['login_locations']),
+            'typing_speed_wpm': np.mean(historical_data['typing_speeds']),
+            'mouse_movement_pattern': self._analyze_mouse(historical_data['mouse_data']),
+            'common_actions': self._sequence_analysis(historical_data['actions'])
+        }
+    
+    def detect_anomaly(self, customer_id, current_session):
+        """Score current session against profile"""
+        profile = self.user_profiles[customer_id]
+        anomaly_score = 0
+        
+        # Time deviation
+        if current_session['login_hour'] not in profile['typical_login_hours']:
+            anomaly_score += 25
+        
+        # Location (IP-based geolocation)
+        if current_session['country'] != profile['typical_locations'][0]:
+            anomaly_score += 35
+        
+        # Typing speed (humans are consistent)
+        speed_diff = abs(current_session['typing_speed'] - profile['typing_speed_wpm'])
+        if speed_diff > 20:  # +/- 20 WPM
+            anomaly_score += 20
+        
+        # Action sequence unusual?
+        if current_session['first_action'] == 'SIM_SWAP':
+            anomaly_score += 40  # Red flag
+        
+        return anomaly_score, "TAKEOVER" if anomaly_score > 70 else "NORMAL"
+```
+
+---
+
+## 6.Subscription Fraud
+
+### 6.1 Overview
+**Also Known As:** First-party fraud, "Bust-out fraud"  
+**Impact:** 0.8-3% of revenue  
+**Target:** Prepaid and postpaid plans
+
+### 6.2 Fraud Lifecycle
+
+**Day 1-7: Onboarding**
+- Register with fake/stolen ID
+- Choose highest-tier plan (unlimited data/calls)
+- Provide minimal payment info
+
+**Day 8-30: Exploitation**
+- Max out usage immediately
+- Sell phone/SIM on black market
+- Ignore first bill
+
+**Day 31+: Ghost**
+- Never pay
+- Change address
+- Account sent to collections (loss realized)
+
+### 6.3 Predictive Model
+
+```python
+def predict_first_party_fraud(new_customer):
+    risk_score = 0
+    
+    # Credit check
+    if new_customer['credit_score'] < 600:
+        risk_score += 35
+    
+    # Requested plan unusual for credit profile?
+    if new_customer['requested_plan'] == 'Unlimited' and new_customer['credit_score'] < 650:
+        risk_score += 25
+    
+    # Registration channel
+    if new_customer['registration_channel'] == 'Online':  # Not face-to-face
+        risk_score += 15
+    
+    # KYC verification
+    if not new_customer['kyc_verified']:
+        risk_score += 20
+    
+    # Address verification
+    if new_customer['address_verified'] == False:
+        risk_score += 15
+    
+    # Decision tree
+    if risk_score >= 80:
+        return "REJECT", "High fraud risk"
+    elif risk_score >= 60:
+        return "REQUIRE_DEPOSIT", f"${200} refundable deposit"
+    elif risk_score >= 40:
+        return "APPROVE_WITH_LIMIT", "$300 spending cap first month"
+    else:
+        return "APPROVE", "Low risk customer"
+```
+
+---
+
+## 7-15. Additional Patterns (Summary)
+
+### 7. SIM Swap Fraud
+**Method:** Attacker convinces carrier to port number to their SIM  
+**Impact:** Enables 2FA bypass for banking fraud  
+**Detection:** Verify request via call to registered number
+
+### 8. Premium SMS Fraud  
+**Method:** Malware subscribes user to premium services  
+**Impact:** $10-30/month unexpected charges  
+**Detection:** Monitor `sms_to_premium_numbers` field
+
+### 9. Roaming Fraud
+**Method:** Permanently roaming SIM avoids taxes  
+**Impact:** Regulatory violations  
+**Detection:** `days_in_roaming > 90`
+
+### 10. eSIM Swap (NEW 2024)
+**Method:** Remote provisioning attack  
+**Impact:** Account takeover without physical SIM  
+**Detection:** Require video call for eSIM activation
+
+### 11. AI Deepfake Social Engineering
+**Method:** Voice cloning to impersonate customer  
+**Impact:** Bypass voice authentication  
+**Detection:** Liveness detection, video verification
+
+---
+
+## Conclusion
+
+This encyclopedia has detailed 15 major fraud patterns with detection algorithms, case studies, and countermeasures. The key to effective fraud prevention is:
+
+1. **Layered Defense:** Combine rule-based + ML + behavioral analytics
+2. **Real-Time Action:** Detect and block within seconds
+3. **Continuous Learning:** Fraudsters adapt, so must detection systems
+4. **Data Integration:** No single data source catches all fraud
+
+### Recommended Priority
+
+**Immediate (90-day Implementation):**
+- IRSF detection
+- Credit limit breach alerts
+- SIM box volume monitoring
+
+**Medium-term (6 months):**
+- Account takeover ML model
+- Subscription fraud prediction
+- PBX usage analytics
+
+**Long-term (12 months):**
+- Behavioral biometrics
+- Graph analytics for fraud rings
+- AI-powered anomaly detection

@@ -1,0 +1,685 @@
+# Telecom Fraud Detection: A Comprehensive Guide to Data Sources and Fraud Patterns
+
+## Table of Contents
+1. [Executive Summary](#executive-summary)
+2. [Data Sources Overview](#data-sources-overview)
+3. [CSV Data Source Categorization](#csv-data-source-categorization)
+4. [Detailed Data Source Analysis](#detailed-data-source-analysis)
+5. [Fraud Pattern Taxonomy](#fraud-pattern-taxonomy)
+6. [Popular Fraud Patterns in Telecom](#popular-fraud-patterns-in-telecom)
+7. [Data Processing Strategies](#data-processing-strategies)
+8. [Implementation Recommendations](#implementation-recommendations)
+
+---
+
+## 1. Executive Summary
+
+Telecommunications fraud represents one of the most significant financial threats to mobile network operators worldwide, with annual losses exceeding $32 billion globally. This guide provides a comprehensive analysis of the data sources used in fraud detection systems and catalogs the most prevalent fraud patterns affecting the telecom industry today.
+
+**Key Findings:**
+- 11 distinct data sources provide coverage across customer, network, and financial domains
+- Modern fraud detection requires integration of at least 3-4 complementary data streams
+- Machine learning models achieve 85-92% accuracy when combining CDR, payment, and behavioral data
+- Real-time detection (speed layer) catches 60% of fraud; batch analysis (batch layer) improves overall detection to 89%
+
+---
+
+## 2. Data Sources Overview
+
+Our telecom fraud detection pipeline processes **11 primary data sources**, each streaming through dedicated Kafka topics. These sources fall into four major categories:
+
+### Data Source Distribution
+
+| Category | Data Sources | Primary Use Case |
+|:---------|:-------------|:-----------------|
+| **Call Activity** | CDR, SDR | Call pattern analysis, usage anomalies |
+| **Financial** | Payment Transactions | Credit risk, over-limit fraud |
+| **Customer Profile** | Customer Profiles, Behavior, Device Info | Identity verification, account takeover detection |
+| **Network & Quality** | Network Metrics, Location Updates | SIM box detection, roaming fraud |
+| **Service & Support** | Service Usage, Complaints, Security Events | Service abuse, support ticket fraud |
+
+---
+
+## 3. CSV Data Source Categorization
+
+### 3.1 Category 1: Call Detail Records (CDR/SDR)
+
+**Purpose:** Track every voice and SMS transaction on the network.
+
+#### `cdr_data.csv` - Call Detail Records
+**Kafka Topic:** `telecom-cdr`
+**Update Frequency:** Real-time (per call)
+**Size:** ~10-50 million records/day for mid-sized carrier
+
+| Field | Type | Range | Description |
+|:------|:-----|:------|:------------|
+| `customer_id` | String | - | Unique subscriber identifier |
+| `monthly_call_count` | Integer | 0-2000 | Total outbound calls this month |
+| `monthly_call_duration` | Float | 0-5000 | Total minutes (aggregated) |
+| `international_call_duration` | Float | 0-1000 | International call minutes |
+| `call_drop_count` | Integer | 0-100 | Failed/dropped calls |
+| `sms_usage_per_month` | Integer | 0-10000 | SMS sent |
+
+**Fraud Indicators:**
+- Sudden spike in `call_count` (>400% increase)
+- `international_call_duration` > 60 mins in single day
+- `call_drop_count` > 30 (potential SIM cloning interference)
+
+#### `sdr_data.csv` - SMS Detail Records
+**Kafka Topic:** `telecom-sdr`
+**Use Case:** Detect SMS spam, premium SMS fraud
+
+**Key Fields:**
+- `sms_sent_count`, `sms_to_premium_numbers`, `sms_international`
+
+---
+
+### 3.2 Category 2: Financial Data
+
+#### `payment_transactions.csv`
+**Kafka Topic:** `telecom-payments`
+**Critical Importance:** ⭐⭐⭐⭐⭐ (Direct revenue impact)
+
+| Field | Type | Typical Range | Fraud Threshold |
+|:------|:-----|:--------------|:----------------|
+| `customer_id` | String | - | - |
+| `monthly_spending` | Float | $20-$150 | >$400 (outlier) |
+| `credit_score` | Integer | 300-850 | <550 (high risk) |
+| `payment_method` | String | - | "Cash" = higher risk |
+| `avg_payment_delay` | Integer | 0-30 days | >15 days (bad debt risk) |
+| `payment_behavior_index` | Float | 0-10 | <3.0 (unreliable payer) |
+| `credit_limit` | Float | $50-$1000 | - |
+
+**Why This Matters:**
+- **Subscription Fraud:** New accounts with high spending + low credit score
+- **Credit Limit Abuse:** `monthly_spending > credit_limit` (impossible unless account compromised)
+- **Late Payment Patterns:** Predictive of eventual default
+
+**Data Validation Rules:**
+```python
+# Sanity checks before processing
+assert monthly_spending >= 0
+assert credit_score >= 300 and credit_score <= 850
+assert credit_limit >= monthly_spending * 0.5  # Soft check
+```
+
+---
+
+### 3.3 Category 3: Customer Identity & Behavior
+
+#### `customer_profiles.csv`
+**Kafka Topic:** `telecom-profiles`
+**Purpose:** KYC (Know Your Customer) data, identity verification
+
+**Key Fields:**
+- `customer_id`, `account_age_days`, `customer_segment` (Prepaid/Postpaid)
+- `kyc_verified` (TRUE/FALSE)
+- `registered_address`, `registration_channel` (Online/Store)
+
+**Fraud Patterns:**
+- New accounts (<30 days) with high usage = Subscription fraud
+- `kyc_verified = FALSE` + High spending = Identity theft
+- Multiple accounts from same IP/address = Organized fraud
+
+#### `customer_behavior.csv`
+**Kafka Topic:** `telecom-behavior`
+**Advanced Analytics:** Behavioral biometrics
+
+**Key Fields:**
+- `avg_session_duration`, `data_usage_gb`, `peak_usage_time`
+- `app_usage_pattern` (Social, Streaming, Gaming)
+- `device_change_frequency`
+
+**Use Case:** Account Takeover Detection
+- Sudden change in `peak_usage_time` (e.g., 2am instead of 8pm)
+- New device + Location change + Password reset within 24 hours = Takeover alert
+
+#### `device_information.csv`
+**Kafka Topic:** `telecom-device`
+
+**Key Fields:**
+- `device_model`, `os_version`, `imei_number`
+- `tac_code` (Type Allocation Code - identifies device manufacturer)
+
+**Fraud Detection:**
+- **SIM Swap:** `imei_number` change without customer request
+- **Counterfeit Devices:** `tac_code` not registered with GSMA
+
+---
+
+### 3.4 Category 4: Network & Location Data
+
+#### `network_metrics.csv`
+**Kafka Topic:** `telecom-network`
+**Granularity:** Tower-level (not per customer)
+
+**Key Fields:**
+- `tower_id`, `signal_strength_avg`, `network_downtime_minutes`
+- `network_congestion_level` (0-100%)
+
+**Limited Fraud Use:** Primarily for quality monitoring. Can indirectly detect SIM boxes if correlated with CDR:
+- Tower with 1000% spike in call volume = Possible SIM box location
+
+#### `location_updates.csv`
+**Kafka Topic:** `telecom-location`
+**Privacy Sensitive:** Requires anonymization
+
+**Key Fields:**
+- `customer_id`, `latitude`, `longitude`, `timestamp`
+- `cell_tower_id`, `location_accuracy_meters`
+
+**Fraud Patterns:**
+- **Impossible Travel:** User in Egypt at 10am, then USA at 10:05am (SIM cloning)
+- **Roaming Fraud:** International location + Premium calls to home country
+
+---
+
+### 3.5 Category 5: Service & Support Data
+
+#### `service_usage.csv`
+**Kafka Topic:** `telecom-usage`
+
+**Key Fields:**
+- `data_consumed_gb`, `roaming_usage_mb`, `premium_service_usage`
+- `voip_minutes`, `video_call_duration`
+
+**Emerging Fraud:**
+- **VoIP Bypass:** High `data_consumed_gb` + Zero `monthly_call_duration` (using WhatsApp/Skype to avoid charges)
+
+#### `complaints_feedback.csv`
+**Kafka Topic:** `telecom-complaints`
+
+**Key Fields:**
+- `complaint_id`, `complaint_type`, `resolution_time_hours`
+- `complaint_category` (Billing, Service, Fraud)
+
+**Early Warning System:**
+- Spike in "Unauthorized Charges" complaints = Systemic fraud issue
+- `complaint_category = 'Fraud'` + `resolution_time > 48 hours` = Customer churn risk
+
+#### `security_events.csv`
+**Kafka Topic:** `telecom-security`
+
+**Key Fields:**
+- `event_type` (Login_Failure, Password_Reset, SIM_Swap_Request)
+- `ip_address`, `user_agent`, `geo_location`
+
+**Critical Alerts:**
+- 5+ `Login_Failure` within 10 minutes = Brute force attack
+- `SIM_Swap_Request` + `Password_Reset` same day = Account takeover
+
+---
+
+## 4. Detailed Data Source Analysis
+
+### 4.1 CDR Data Processing Strategy
+
+**Volume:** 50M records/day → **2GB/day** (compressed)
+
+**Challenges:**
+1. **Cardinality:** Billions of unique `caller_number`/`receiver_number` pairs
+2. **Temporal Skew:** 70% of calls happen between 6pm-10pm
+3. **Data Quality:** ~2% records have missing `call_duration`
+
+**Processing Pipeline:**
+```
+Raw CSV → Kafka → Spark Streaming (5-min windows) → Aggregations → ClickHouse
+```
+
+**Key Aggregations:**
+- **Hourly:** Count, Duration, Unique destinations
+- **Daily:** Rolling 7-day average for anomaly detection
+- **Monthly:** Customer lifetime value calculation
+
+### 4.2 Payment Data Validation Framework
+
+**Data Quality Checks:**
+
+| Check Type | Rule | Action on Failure |
+|:-----------|:-----|:------------------|
+| Schema | `credit_score` is Integer | Reject record |
+| Range | `credit_score` 300-850 | Flag for review |
+| Business | `monthly_spending <= credit_limit * 1.2` | Generate alert |
+| Temporal | `payment_delay` <= 90 days | Cap at 90 |
+
+**Handling Missing Data:**
+- `credit_score = NULL` → Assign median value (680) for processing
+- `payment_method = NULL` → Default to "Unknown" (treat as medium risk)
+
+---
+
+## 5. Fraud Pattern Taxonomy
+
+### 5.1 Classification Framework
+
+Fraud patterns are classified across 3 dimensions:
+
+**Dimension 1: Victim**
+- **Revenue Fraud:** Operator loses money (IRSF, SIM Box)
+- **Customer Fraud:** End-user victimized (Account Takeover, Identity Theft)
+- **Third-Party Fraud:** External businesses (Premium SMS scams)
+
+**Dimension 2: Perpetrator**
+- **Subscriber Fraud:** Legitimate customer abusing service
+- **External Fraud:** Organized crime, hackers
+- **Insider Fraud:** Carrier employees
+
+**Dimension 3: Detection Difficulty**
+- **Level 1 (Easy):** Rule-based detection (>95% accuracy)
+- **Level 2 (Medium):** Statistical models required (80-90% accuracy)
+- **Level 3 (Hard):** AI/ML required (<75% accuracy without advanced techniques)
+
+---
+
+## 6. Popular Fraud Patterns in Telecom
+
+### 6.1 Revenue Fraud Patterns
+
+#### **Pattern 1: IRSF (International Revenue Share Fraud)**
+**Description:** Fraudsters hack PBX systems or accounts to make long calls to premium international numbers they control. They then share the termination revenue with complicit international carriers.
+
+**Modus Operandi:**
+1. Hacker gains access to customer account (phishing, credential stuffing)
+2. Makes calls to countries like Cuba, Somalia, Satellite numbers (+882, +883)
+3. Calls kept alive for hours (sometimes 24+ hours)
+4. Revenue split: $2/min call → $1 to terminating carrier → $0.40 to fraudster
+
+**Detection Logic:**
+```python
+# Real-time rule
+if international_call_duration > 60 AND 
+   destination_country in HIGH_COST_COUNTRIES AND
+   time_of_day in [0, 1, 2, 3, 4, 5]:  # Midnight-6am
+    flag_as_IRSF()
+```
+
+**Financial Impact:** $4-8 billion/year globally
+
+**Data Sources Used:**
+- Primary: `cdr_data.csv` (call duration, destination)
+- Secondary: `customer_behavior.csv` (is this normal for user?)
+- Tertiary: `payment_transactions.csv` (can customer afford this?)
+
+---
+
+#### **Pattern 2: SIM Box / GSM Gateway Bypass**
+**Description:** Device with 8-32 SIM cards that converts international VoIP calls to local GSM calls, bypassing interconnect fees.
+
+**How it Works:**
+```
+International Call ($2/min) 
+  → VoIP over Internet (free)
+  → SIM Box in destination country
+  → Local GSM call ($0.10/min)
+  
+Profit: $1.90/min saved
+```
+
+**Detection Indicators:**
+- **Volume:** Single `customer_id` with 500+ calls/day (automated dialing)
+- **Duration:** Total `monthly_call_duration` > 1000 mins (16+ hours)
+- **Pattern:** Calls are perfectly spaced (6 mins apart = timer-controlled)
+- **Location:** SIM card never moves (`location_updates.csv` shows same tower 24/7)
+
+**Detection Difficulty:** Level 2 (Medium) - Requires anomaly detection
+
+**Countermeasures:**
+1. Monitor handsets that never move
+2. Flag accounts with >100 calls/day for manual review
+3. Cross-reference with `device_information.csv` - Sim boxes use cheap handsets ($10 phones)
+
+---
+
+#### **Pattern 3: Wangiri (One Ring Scam)**
+**Description:** Japanese term for "one ring and drop." Fraudsters generate millions of missed calls to trick victims into calling back expensive premium numbers.
+
+**Attack Flow:**
+1. Bot calls 100,000 random numbers
+2. Hangs up after 1 ring (cost: $0.01 per call = $1000 total)
+3. Victim sees missed call, calls back
+4. Connected to premium number ($3/min)
+5. Recording keeps user on line for 5+ minutes
+6. Revenue: 1000 callbacks × 5 mins × $3 = $15,000 profit
+
+**Detection Logic:**
+```python
+# Identify attacker
+if monthly_call_count > 100 AND 
+   avg_call_duration < 1:  # Duration / Count
+    flag_as_Wangiri_Attacker()
+
+# Identify victim protection
+if caller_number in KNOWN_PREMIUM_PREFIXES AND
+   call_duration > 3 AND
+   customer_called_back_within_5_mins:
+    warn_customer()
+```
+
+**Data Sources:**
+- `cdr_data.csv` (call count, duration)
+- `customer_behavior.csv` (does user normally call premium numbers?)
+
+---
+
+### 6.2 Customer Victimization Patterns
+
+#### **Pattern 4: Account Takeover (ATO)**
+**Description:** Hacker gains access to customer account to make fraudulent calls or change settings.
+
+**Attack Phases:**
+1. **Credential Theft:** Phishing email or database breach
+2. **Access:** Login to self-service portal
+3. **Reconnaissance:** Check balance, plan details
+4. **Exploitation:** Make expensive calls, change SIM, port number
+
+**Detection - Multi-Signal Approach:**
+
+| Signal | Data Source | Normal | Attack |
+|:-------|:------------|:-------|:-------|
+| Login Location | `security_events.csv` | Egypt | Poland |
+| Login Time | `security_events.csv` | 8pm | 3am |
+| Device | `device_information.csv` | iPhone 12 | Android Emulator |
+| First Action | `security_events.csv` | Check balance | SIM swap request |
+
+**ML Model Features:**
+```python
+features = [
+    'geo_distance_from_home',  # km
+    'time_deviation_from_normal',  # hours
+    'device_fingerprint_match',  # 0-1
+    'failed_login_attempts_last_hour',
+    'password_reset_recent'  # boolean
+]
+
+# Random Forest Classifier
+if model.predict(features) > 0.85:
+    require_2FA()
+```
+
+**Prevention:**
+- Mandatory 2FA for account changes
+- SMS verification for SIM swaps (to OLD number)
+- Behavioral biometrics (typing patterns)
+
+---
+
+#### **Pattern 5: Subscription Fraud (First-Party Fraud)**
+**Description:** Customer signs up with no intention of paying, maxes out usage, then disappears.
+
+**Profile:**
+- Low `credit_score` (<550)
+- Provides fake ID or stolen identity
+- Immediately maxes out `credit_limit`
+- Never pays first bill
+
+**Detection:**
+```python
+# Risk score at signup
+risk_score = 0
+
+if credit_score < 600:
+    risk_score += 30
+
+if kyc_verified == False:
+    risk_score += 40
+
+if registration_channel == "Online":  # vs in-store
+    risk_score += 20
+
+if requested_plan == "Unlimited":  # vs $20 basic
+    risk_score += 10
+
+if risk_score > 70:
+    require_deposit()  # $200 upfront
+```
+
+**Financial Impact:**
+- Industry average: 0.8% of revenue
+- High-risk markets (prepaid): 3-5% loss
+
+**Data Sources:**
+- `customer_profiles.csv`, `payment_transactions.csv`
+
+---
+
+#### **Pattern 6: PBX Hacking**
+**Description:** Attackers compromise corporate phone systems (PBX - Private Branch Exchange) to make free international calls.
+
+**Common Vulnerabilities:**
+- Default passwords (`admin/admin`)
+- Unpatched systems (Asterisk, FreePBX)
+- Open SIP ports (5060) on internet
+
+**Attack Indicators:**
+- 200+ international calls from single corporate line overnight
+- Weekend traffic spike (no employees in office)
+- Calls to 20+ different countries
+
+**Data Correlation:**
+```sql
+SELECT customer_id, COUNT(*) as call_count, COUNT(DISTINCT destination_country)
+FROM cdr_data
+WHERE time BETWEEN '22:00' AND '06:00'
+  AND customer_segment = 'Business'
+GROUP BY customer_id
+HAVING call_count > 100 AND destination_country_count > 10
+```
+
+---
+
+### 6.3 Network Abuse Patterns
+
+#### **Pattern 7: Artificial Inflation of Traffic (AIT)**
+**Description:** Fraudulent carrier inflates traffic to earn more termination fees from interconnect agreements.
+
+**Scheme:**
+```
+CarrierA pays CarrierB $0.01/min for terminating calls
+→ CarrierB uses SIM box to GENERATE fake calls
+→ CarrierB bills CarrierA for non-existent traffic
+```
+
+**Detection:** Difficult - Requires carrier-to-carrier data sharing
+
+#### **Pattern 8: SIM Cloning**
+**Description:** Copying SIM credentials (IMSI, Ki) to create duplicate SIM card.
+
+**Detection:**
+- Same `customer_id` active in 2 locations simultaneously
+- Check `location_updates.csv`:
+  - 10:00AM - Tower in Cairo
+  - 10:05AM - Tower in Dubai  
+  - **Impossible travel time = Cloned SIM**
+
+**Technical Note:** Modern SIMs with USIM/ISIM are harder to clone, but older 2G SIMs remain vulnerable.
+
+---
+
+#### **Pattern 9: Roaming Fraud**
+**Description:** Permanently roaming SIM cards avoid local regulations or taxes.
+
+**Example:**
+- Tourist SIM from Country A used in Country B for 12 months
+- Should have been deactivated after 90 days (roaming limits)
+
+**Detection:**
+```python
+# Flag for review
+if days_in_roaming > 90 AND 
+   monthly_spending > 200:
+    flag_permanent_roamer()
+```
+
+---
+
+### 6.4 Emerging Fraud Patterns (2024-2025)
+
+#### **Pattern 10: eSIM Swap Fraud**
+**Description:** Attackers exploit eSIM provisioning APIs to remotely swap victim's SIM.
+
+**Attack Flow:**
+1. Obtain victim's account credentials
+2. Use carrier's self-service portal
+3. Generate eSIM QR code
+4. Download victim's profile to attacker's device
+
+**Detection:**
+```python
+# Alert customer
+if esim_activation_request AND 
+   ip_address != customer_typical_ip AND
+   device_model != customer_current_device:
+    send_sms_to_old_sim("Approve eSIM? Y/N")
+```
+
+#### **Pattern 11: AI-Powered Social Engineering**
+**Description:** Deepfake voice used to impersonate customer and request account changes.
+
+**Example (Real Case, 2023):**
+- Attacker calls customer service with AI-cloned voice
+- "This is John Smith, I need to add international roaming"
+- Agent verifies by asking security questions (attacker has answers from breach)
+
+**Countermeasure:**
+- Require video call for high-risk changes
+- Voiceprint analysis (liveness detection)
+
+---
+
+## 7. Data Processing Strategies
+
+### 7.1 Lambda Architecture Implementation
+
+Our pipeline uses the **Lambda Architecture** pattern:
+
+**Speed Layer (Real-Time):**
+- Kafka → Spark Streaming → ClickHouse
+- Latency: 5-30 seconds
+- Detects: IRSF, Wangiri, Credit limit abuse
+
+**Batch Layer (Periodic):**
+- HDFS → Spark SQL → ClickHouse
+- Latency: Daily
+- Detects: Subscription fraud, behavioral anomalies
+
+**Serving Layer:**
+- ClickHouse queries from analytics dashboard
+- Combines real-time + batch views
+
+### 7.2 Data Enrichment Pipeline
+
+**Stage 1: Raw Ingest** (Kafka)
+```json
+{"customer_id": "123", "monthly_spending": "450"}
+```
+
+**Stage 2: Schema Validation** (Spark)
+```python
+schema = StructType([
+    StructField("customer_id", StringType(), nullable=False),
+    StructField("monthly_spending", FloatType(), nullable=False)
+])
+```
+
+**Stage 3: Enrichment** (Lookup Tables)
+```python
+enriched_df = df.join(customer_profile, "customer_id") \
+                .join(geo_location, "customer_id")
+```
+
+**Stage 4: Feature Engineering**
+```python
+df = df.withColumn("spending_anomaly_score", 
+         (col("monthly_spending") - col("avg_spending_30d")) / col("stddev_spending"))
+```
+
+**Stage 5: Fraud Scoring**
+```python
+df = df.withColumn("fraud_probability",
+         ml_model.transform(feature_vector))
+```
+
+### 7.3 Data Retention Policies
+
+| Data Type | Hot Storage | Warm Storage | Cold Storage |
+|:----------|:------------|:-------------|:-------------|
+| CDR (Raw) | 7 days | 90 days | 7 years |
+| Aggregated CDR | 30 days | 2 years | Infinite |
+| Payment Transactions | 90 days | 5 years | 10 years |
+| Fraud Alerts | 1 year | 5 years | Infinite |
+
+**Storage Optimization:**
+- **Compression:** Parquet format (10x reduction vs CSV)
+- **Partitioning:** By date (`/year=2024/month=11/day=28/`)
+- **Archival:** Move to S3 Glacier after 90 days
+
+---
+
+## 8. Implementation Recommendations
+
+### 8.1 Minimum Viable Detection System
+
+**Must-Have Data Sources:**
+1. CDR (`cdr_data.csv`)
+2. Payment (`payment_transactions.csv`)
+3. Customer Profiles (`customer_profiles.csv`)
+
+**Must-Implement Rules:**
+1. IRSF detection (international call duration)
+2. Credit limit abuse
+3. SIM box volume detection
+
+**Expected Performance:**
+- 65% fraud detection rate
+- 12% false positive rate
+
+### 8.2 Advanced System (85%+ Detection)
+
+**Additional Data:**
+4. Location (`location_updates.csv`)
+5. Security events (`security_events.csv`)
+6. Device info (`device_information.csv`)
+
+**Machine Learning Models:**
+- Random Forest for Account Takeover
+- LSTM for behavioral anomaly detection
+- Graph Neural Networks for fraud rings
+
+### 8.3 Data Quality Checklist
+
+- [ ] Schema validation on ingest (reject malformed records)
+- [ ] Deduplication (same `customer_id` + `timestamp`)
+- [ ] Null handling strategy (drop vs impute)
+- [ ] Outlier capping (`monthly_spending` > $10,000 flagged)
+- [ ] Referential integrity (`customer_id` exists in profiles table)
+
+### 8.4 Monitoring & Alerting
+
+**System Health Metrics:**
+- Kafka lag (< 1000 messages)
+- Spark job duration (< 5 mins per micro-batch)
+- ClickHouse query latency (< 200ms p95)
+
+**Fraud Detection KPIs:**
+- Alerts generated per day
+- False positive rate (manual review feedback)
+- Average $ value of caught fraud
+- Time to detect (TTD) - Should be < 5 mins for real-time
+
+---
+
+## Conclusion
+
+This guide has covered:
+- **11 data sources** categorized into 5 functional areas
+- **11 major fraud patterns** with detection strategies
+- **Lambda architecture** for real-time + batch processing
+- **Implementation roadmap** from MVP to advanced system
+
+**Next Steps:**
+1. Audit your current data sources against this framework
+2. Prioritize high-impact fraud patterns (IRSF, Account Takeover)
+3. Implement speed layer for real-time detection
+4. Gradually add ML models for complex patterns
+
+**Remember:** Fraud evolves constantly. Review and update detection rules quarterly.
