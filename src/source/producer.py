@@ -15,14 +15,10 @@ else:
 
 TOPIC_MAP = {
     'cdr_data.csv': 'telecom-cdr',
-    'complaints_feedback.csv': 'telecom-complaints',
-    'customer_behavior.csv': 'telecom-behavior',
-    'customer_profiles.csv': 'telecom-profiles',
-    'device_information.csv': 'telecom-device',
+    'sdr_data.csv': 'telecom-sdr',
+    'payment_transactions.csv': 'telecom-payments',
     'location_updates.csv': 'telecom-location',
     'network_metrics.csv': 'telecom-network',
-    'payment_transactions.csv': 'telecom-payments',
-    'sdr_data.csv': 'telecom-sdr',
     'security_events.csv': 'telecom-security',
     'service_usage.csv': 'telecom-usage'
 }

@@ -41,21 +41,42 @@
 - Cross-platform: Windows & WSL support
 
 ### Topics
-`telecom-cdr`, `telecom-payments`, `telecom-location`, `telecom-security`, `telecom-network`, `telecom-device`, `telecom-profiles`, `telecom-complaints`, `telecom-usage`, `telecom-sdr`, `telecom-behavior`
+**Data Topics**: `telecom-cdr`, `telecom-payments`, `telecom-location`, `telecom-security`, `telecom-network`, `telecom-device`, `telecom-profiles`, `telecom-complaints`, `telecom-usage`, `telecom-sdr`, `telecom-behavior`
+
+**Action Topic**: `telecom-fraud-actions` (real-time fraud alerts for immediate blocking)
 
 ---
 
 ## Phase 3: Processing Layer (Spark on WSL2)
 
 ### Real-time Stream Processor ([stream_processor.py](file:///D:/ITI-Data_Engineer/Projects/Telecom-Fraud-Detection-Pipeline/src/processing/stream_processor.py))
-**Input**: Kafka topics → **Output**: ClickHouse `fraud_alerts`
+**Input**: Kafka topics → **Dual Output**:
+1. ClickHouse `fraud_alerts` (for Visualization)
+2. Kafka `telecom-fraud-actions` (for Immediate Action)
+
+**Architecture**: Decoupled action layer using Kafka as event queue
+- Prevents Speed Layer from being slowed by external API calls
+- Enables sub-5-second fraud response latency
 
 **Fraud Rules**:
-- CDR: Duration > 15 min
-- Payments: Amount > $100
-- Security: Severity > 3
-- Location: Roaming status
-- Network: Packet loss > 1%
+- **SIM Box / Gateway Bypass**: `monthly_call_duration > 1000` AND `monthly_call_count > 500`
+- **Wangiri (One Ring Scam)**: High call count with avg duration < 1 min
+- **IRSF**: `international_call_duration > 60`
+- **Subscription Fraud**: High spending + Bad credit + Late payments
+- **Credit Limit Abuse**: `monthly_spending > credit_limit`
+
+### Action Consumer ([action_consumer.py](file:///D:/ITI-Data_Engineer/Projects/Telecom-Fraud-Detection-Pipeline/src/processing/action_consumer.py))
+**Input**: Kafka `telecom-fraud-actions` → **Output**: Blocking Actions
+
+**Purpose**: Lightweight consumer that executes fraud prevention actions
+- Reads alerts from action topic
+- Simulates blocking API calls (50ms latency)
+- Decoupled from Spark for resilience
+
+**Production Extensions**:
+- HTTP requests to HLR/HSS (Home Location Register)
+- SMS/Email notifications
+- Integration with Policy Servers (PCRF)
 
 ### Batch Processor ([batch_processor.py](file:///D:/ITI-Data_Engineer/Projects/Telecom-Fraud-Detection-Pipeline/src/processing/batch_processor.py))
 **Input**: HDFS Parquet files → **Output**: ClickHouse [daily_stats](file:///D:/ITI-Data_Engineer/Projects/Telecom-Fraud-Detection-Pipeline/src/processing/batch_processor.py#56-185)

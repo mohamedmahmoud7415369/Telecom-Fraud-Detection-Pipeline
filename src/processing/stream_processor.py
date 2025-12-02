@@ -13,41 +13,56 @@ def get_spark_session():
         .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
         .getOrCreate()
 
-def write_to_clickhouse(batch_df, batch_id):
-    """Write fraud alerts to ClickHouse using HTTP interface"""
+def process_batch(batch_df, batch_id):
+    """
+    Write fraud alerts to:
+    1. ClickHouse (for Visualization)
+    2. Kafka 'telecom-fraud-actions' (for Immediate Action)
+    """
     if batch_df.count() > 0:
-        # Collect data to driver
-        rows = batch_df.collect()
+        # Cache the batch to avoid re-computing for double write
+        batch_df.persist()
         
-        # Prepare INSERT query
-        import requests
-        
-        clickhouse_url = "http://localhost:8123/"
-        auth = ('admin', 'admin123')
-        
-        print(f"[Batch {batch_id}] Writing {len(rows)} fraud alerts to ClickHouse...")
-        
-        for row in rows:
-            # Format timestamp to remove microseconds (ClickHouse DateTime doesn't support them)
-            ts_str = row.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            # --- 1. Write to ClickHouse ---
+            rows = batch_df.collect()
+            import requests
             
-            # Build INSERT query
-            query = f"""
-            INSERT INTO telecom_fraud.fraud_alerts 
-            (call_id, caller_number, receiver_number, duration_min, timestamp, alert_type)
-            VALUES 
-            ('{row.call_id}', '{row.caller_number}', '{row.receiver_number}', 
-             {row.duration_min}, '{ts_str}', '{row.alert_type}')
-            """
+            clickhouse_url = "http://localhost:8123/"
+            auth = ('admin', 'admin123')
             
-            try:
-                response = requests.post(clickhouse_url, auth=auth, data=query)
-                if response.status_code != 200:
-                    print(f"Failed to insert row: {response.text}")
-            except Exception as e:
-                print(f"Error writing to ClickHouse: {e}")
-        
-        print(f"[Batch {batch_id}] Successfully wrote fraud alerts")
+            print(f"[Batch {batch_id}] Processing {len(rows)} alerts...")
+            
+            for row in rows:
+                ts_str = row.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                query = f"""
+                INSERT INTO telecom_fraud.fraud_alerts 
+                (call_id, caller_number, receiver_number, duration_min, timestamp, alert_type)
+                VALUES 
+                ('{row.call_id}', '{row.caller_number}', '{row.receiver_number}', 
+                 {row.duration_min}, '{ts_str}', '{row.alert_type}')
+                """
+                try:
+                    requests.post(clickhouse_url, auth=auth, data=query)
+                except Exception as e:
+                    print(f"Error writing to ClickHouse: {e}")
+
+            # --- 2. Write to Kafka (Action Topic) ---
+            # Convert columns to JSON 'value' column
+            kafka_df = batch_df.selectExpr("to_json(struct(*)) AS value")
+            
+            kafka_df.write \
+                .format("kafka") \
+                .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \
+                .option("topic", "telecom-fraud-actions") \
+                .save()
+                
+            print(f"[Batch {batch_id}] Sent alerts to Kafka action topic")
+            
+        except Exception as e:
+            print(f"[Batch {batch_id}] Error in batch processing: {e}")
+        finally:
+            batch_df.unpersist()
 
 def process_stream():
     spark = get_spark_session()
@@ -88,7 +103,7 @@ def process_stream():
      .withColumn("duration_min", col("monthly_call_duration")) \
      .select("call_id", "caller_number", "receiver_number", "duration_min", "timestamp", "alert_type")
 
-    query_simbox = fraud_simbox.writeStream.foreachBatch(write_to_clickhouse).start()
+    query_simbox = fraud_simbox.writeStream.foreachBatch(process_batch).start()
 
     # --- 2. Wangiri Fraud (One Ring Scam) ---
     # Pattern: Many calls with very short average duration (missed calls)
@@ -103,7 +118,7 @@ def process_stream():
      .withColumn("duration_min", col("monthly_call_duration")) \
      .select("call_id", "caller_number", "receiver_number", "duration_min", "timestamp", "alert_type")
 
-    query_wangiri = fraud_wangiri.writeStream.foreachBatch(write_to_clickhouse).start()
+    query_wangiri = fraud_wangiri.writeStream.foreachBatch(process_batch).start()
 
     # --- 3. IRSF (International Revenue Share Fraud) ---
     # Pattern: Long duration international calls
@@ -117,7 +132,7 @@ def process_stream():
      .withColumn("duration_min", col("international_call_duration")) \
      .select("call_id", "caller_number", "receiver_number", "duration_min", "timestamp", "alert_type")
 
-    query_irsf = fraud_irsf.writeStream.foreachBatch(write_to_clickhouse).start()
+    query_irsf = fraud_irsf.writeStream.foreachBatch(process_batch).start()
 
     # --- Rule 2: Payment Fraud Rules ---
     # Actual CSV columns: customer_id,monthly_spending,credit_score,payment_method,avg_payment_delay,payment_behavior_index,credit_limit
@@ -155,7 +170,7 @@ def process_stream():
      .withColumn("duration_min", col("monthly_spending")) \
      .select("call_id", "caller_number", "receiver_number", "duration_min", "timestamp", "alert_type")
 
-    query_subscription = fraud_subscription.writeStream.foreachBatch(write_to_clickhouse).start()
+    query_subscription = fraud_subscription.writeStream.foreachBatch(process_batch).start()
 
     # --- 5. Credit Limit Abuse ---
     # Pattern: Spending exceeds credit limit
@@ -169,7 +184,7 @@ def process_stream():
      .withColumn("duration_min", col("monthly_spending")) \
      .select("call_id", "caller_number", "receiver_number", "duration_min", "timestamp", "alert_type")
 
-    query_credit = fraud_credit.writeStream.foreachBatch(write_to_clickhouse).start()
+    query_credit = fraud_credit.writeStream.foreachBatch(process_batch).start()
 
     # Await all
     spark.streams.awaitAnyTermination()

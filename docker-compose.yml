@@ -98,8 +98,27 @@ services:
         soft: 262144
         hard: 262144
 
+  # ---------------------------
+  # Grafana (Visualization)
+  # ---------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - clickhouse
+
 volumes:
   kafka1_data:
   kafka2_data:
   kafka3_data:
   clickhouse_data:
+  grafana_data:

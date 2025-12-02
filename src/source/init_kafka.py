@@ -6,19 +6,24 @@ import subprocess
 # Configuration - KRaft Mode (No Zookeeper)
 KAFKA_BROKER = 'localhost:9092,localhost:9093,localhost:9094'
 
+# Stream Topics Only
 TOPICS = [
     'telecom-cdr',
+    'telecom-sdr',
     'telecom-payments', 
     'telecom-location',
-    'telecom-security',
     'telecom-network',
-    'telecom-device',
-    'telecom-profiles',
-    'telecom-complaints',
+    'telecom-security',
     'telecom-usage',
-    'telecom-sdr',
-    'telecom-behavior'
+    'telecom-fraud-actions'
 ]
+
+# Calculation for Partitions and Brokers:
+# 1. Brokers: 3 brokers are selected for High Availability (HA). 
+#    This allows for a Replication Factor of 3, ensuring data survives even if 2 brokers fail.
+# 2. Partitions: Set to 3 (matching the number of brokers).
+#    This ensures a balanced load where each broker acts as a leader for one partition per topic.
+#    If throughput increases significantly, partitions can be increased to 6 or 9.
 
 def check_kafka_containers():
     """Check if Kafka containers are running"""

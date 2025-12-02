@@ -139,14 +139,66 @@ We apply 5 specific rules based on real-world telecom fraud patterns (Egypt/USA 
 - **Line 83:** Adds a new column `alert_type` with the static text "SIM Box..." so we know *why* this was flagged.
 
 ```python
-16: def write_to_clickhouse(batch_df, batch_id):
-...
+16: def process_batch(batch_df, batch_id):
+17:     """
+18:     Write fraud alerts to:
+19:     1. ClickHouse (for Visualization)
+20:     2. Kafka 'telecom-fraud-actions' (for Immediate Action)
+21:     """
+22:     if batch_df.count() > 0:
+23:         batch_df.persist()  # Cache to avoid re-computation
+```
+- **Lines 16-23:** Refactored function now writes to **two destinations** instead of one.
+- **Line 23:** `persist()` caches the DataFrame in memory. Critical optimization—without this, Spark would re-execute all the fraud detection logic twice (once for ClickHouse, once for Kafka), doubling the processing time.
+
+```python
 32:             ts_str = row.timestamp.strftime('%Y-%m-%d %H:%M:%S')
 ...
-44:                 response = requests.post(clickhouse_url, auth=auth, data=query)
+44:                 requests.post(clickhouse_url, auth=auth, data=query)
 ```
 - **Line 32:** Formats the timestamp. ClickHouse is strict and rejected timestamps like `02:57:38.765`. We strip the microseconds (`.765`) to make it `02:57:38`.
 - **Line 44:** Uses a standard HTTP POST request to insert data into ClickHouse. This replaced the complex JDBC driver approach which was causing `ClassNotFoundException` errors.
+
+```python
+50:             kafka_df = batch_df.selectExpr("to_json(struct(*)) AS value")
+51:             
+52:             kafka_df.write \
+53:                 .format("kafka") \
+54:                 .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \
+55:                 .option("topic", "telecom-fraud-actions") \
+56:                 .save()
+```
+- **Line 50:** Converts the entire row into a JSON string and stores it in a column named `value` (Kafka's required format).
+- **Lines 52-56:** Uses Spark's native Kafka connector to write alerts to the `telecom-fraud-actions` topic. This is **non-blocking** and completes in ~5ms, preventing the Speed Layer from being slowed down.
+
+---
+
+### 📄 [src/processing/action_consumer.py](file:///d:/ITI-Data_Engineer/Projects/Telecom-Fraud-Detection-Pipeline/src/processing/action_consumer.py)
+**Purpose:** Lightweight consumer that executes fraud prevention actions (blocking users, sending alerts).
+
+```python
+24:     consumer = KafkaConsumer(
+25:         TOPIC_NAME,
+26:         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+27:         auto_offset_reset='latest',
+28:         group_id='fraud-action-group',
+29:         value_deserializer=lambda x: json.loads(x.decode('utf-8'))
+30:     )
+```
+- **Line 27:** `auto_offset_reset='latest'` means "only process new alerts" (don't replay old ones from when the consumer was offline).
+- **Line 28:** `group_id='fraud-action-group'` enables **consumer groups**. If you run 3 instances of this script, Kafka automatically distributes the workload among them (horizontal scaling).
+- **Line 29:** Deserializes the JSON string back into a Python dictionary.
+
+```python
+15: def block_user(user_id, reason):
+16:     time.sleep(0.05)  # Simulate API latency
+17:     print(f"[ACTION] 🚫 BLOCKED User {user_id} | Reason: {reason}")
+```
+- **Line 16:** Simulates a 50ms HTTP request to the HLR/HSS (Home Location Register) that would disable the SIM card.
+- **Production Extension:** Replace this with:
+  ```python
+  requests.post("https://hlr.telecom.com/block", json={"msisdn": user_id})
+  ```
 
 ---
 
