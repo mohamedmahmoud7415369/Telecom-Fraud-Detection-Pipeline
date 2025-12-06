@@ -1,0 +1,29 @@
+$headers = @{ "Content-Type" = "application/json" }
+$body = @"
+{
+  "name": "telecom-hdfs-sink-FINAL-GO",
+  "config": {
+    "connector.class": "io.confluent.connect.hdfs.HdfsSinkConnector",
+    "tasks.max": "3",
+    "topics": "telecom-cdr,telecom-sdr,telecom-payments,telecom-location,telecom-network,telecom-security,telecom-usage",
+    "hdfs.url": "hdfs://192.168.18.128:8020",
+    "flush.size": "1000",
+    "rotate.interval.ms": "1000",
+    "logs.dir": "/telecom_project/logs",
+    "topics.dir": "/telecom_project/speed_layer",
+    
+    "consumer.auto.offset.reset": "earliest",
+    
+    "format.class": "io.confluent.connect.hdfs.json.JsonFormat",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "schema.compatibility": "NONE",
+    
+    "dfs.client.use.datanode.hostname": "true"
+  }
+}
+"@
+
+
+Invoke-RestMethod -Method Post -Uri "http://localhost:8083/connectors" -Headers $headers -Body $body
